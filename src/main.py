@@ -18,6 +18,30 @@ brain = Brain()
 brain.screen.print("Hello V5")
 
 
+class PIDController:
+    def __init__(self, pGain: float, iGain: float, dGain: float):
+        self.pGain = pGain
+        self.iGain = iGain
+        self.dGain = dGain
+
+        self.integrated = 0
+        self.previousError = 0
+
+    def calculate(self, reading, target, deltaTime) -> float:
+        error = target - reading
+        deltaError = error - self.previousError
+
+        self.integrated += error * deltaTime
+        effort = (
+            self.pGain * error
+            + self.iGain * self.integrated
+            + self.dGain * deltaError / deltaTime
+        )
+
+        self.previousError = error
+        return effort
+
+
 class Scheduler:
     subsystems = []
     scheduledCommands = []
@@ -26,6 +50,8 @@ class Scheduler:
     @staticmethod
     def schedule(command):
         commandRequirements = command.requirements
+
+        print("Scheduling", command.__class__.__name__)
 
         for comm in Scheduler.scheduledCommands:
             for req in commandRequirements:
@@ -38,6 +64,8 @@ class Scheduler:
 
     @staticmethod
     def cancel(command):
+        print("Canceling", command.__class__.__name__)
+
         if command in Scheduler.scheduledCommands:
             Scheduler.scheduledCommands.remove(command)
 
@@ -151,7 +179,7 @@ class ControllerTriggers:
 
 
 class Bumpers:
-    _dBump = Bumper(brain.three_wire_port.d)
+    _dBump = Bumper(brain.three_wire_port.b)
     startBumper = Trigger(_dBump.pressing)
 
     _abump = Bumper(brain.three_wire_port.a)
@@ -363,7 +391,7 @@ class DriveBack(Command):
 class SensorTests(Subsystem):
     def __init__(self):
         Subsystem.__init__(self)
-        self.light = Line(brain.three_wire_port.b)
+        self.light = Line(brain.three_wire_port.g)
 
     def getReflect(self) -> int:
         return self.light.reflectivity()
@@ -540,6 +568,7 @@ class RunUntil(Command):
     def isFinished(self) -> bool:
         return self.condition()
 
+
 class StopMotors(Command):
     def __init__(self, drive: DriveSubsystem) -> None:
         Command.__init__(self)
@@ -569,8 +598,7 @@ Bumpers.startBumper.onTrue = SequentialCommandGroup(
     [
         LowerScoop(scoop),
         RunUntil(
-            DriveBack(drive, 100 / 2.54 / 4 / pi * 5), 
-            lambda: sens.getReflect() > 30
+            DriveBack(drive, 100 / 2.54 / 4 / pi * 5), lambda: sens.getReflect() > 30
         ),
         DriveBack(drive, -2 / 4 / pi * 5),
         StopMotors(drive),
@@ -604,4 +632,4 @@ while True:
             print("Command", command.__class__.__name__)
             command.end()
             command.cancel()
-    sleep(25, MSEC)
+    sleep(25, MSEC)  # time it takes for controllers to update
