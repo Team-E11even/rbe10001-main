@@ -489,15 +489,15 @@ class ArmSubsystem(Subsystem):
         print("target")
 
     def periodic(self):
-        self.shoulderMotor.spin_to_position(
-            self.target.shoulder * 6, RotationUnits.REV, wait=False
-        )
-        self.elbowMotor.spin_to_position(
-            self.target.elbow * 6, RotationUnits.REV, wait=False
-        )
-        self.wristMotor.spin_to_position(
-            self.target.wrist * 6 + self.flickAmount, RotationUnits.REV, wait=False
-        )
+        # self.shoulderMotor.spin_to_position(
+        #     self.target.shoulder, RotationUnits.REV, wait=False
+        # )
+        # self.elbowMotor.spin_to_position(
+        #     self.target.elbow, RotationUnits.REV, wait=False
+        # )
+        # self.wristMotor.spin_to_position(
+        #     self.target.wris + self.flickAmount, RotationUnits.REV, wait=False
+        # )
 
         shoulderPosition = self.shoulderMotor.position(RotationUnits.REV)
         elbowPosition = self.elbowMotor.position(RotationUnits.REV)
@@ -610,11 +610,13 @@ class DriveCamAligned(Command):
         self.addRequirements([self.drive, self.cam])
 
     def periodic(self):
-        offset = self.cam.getDetected()
+        offset = self.cam.getDetectedRelative()
 
         if offset is not None:
-            turn = offset[0]
-            fw = (offset[1] - 4)
+            offsetX, offsetY = offset
+            turn = offset[1] * 100
+            fw = 0
+            # fw = (offset[1] - 4)
             self.drive.setSpeed(fw - turn, fw + turn)
 
 
@@ -727,13 +729,21 @@ class CameraSubsystem(Subsystem):
     def getDetectedRelative(self):
         if self.detected is None:
             return None
-        return (self.detected.centerX, self.detected.centerY)
+        objectX = self.detected.centerX - (320/2)
+        objectY = self.detected.centerY - (200/2)
+
+        kDegPerPixel = 0.1875
+        kRadPerPixel = kDegPerPixel * math.pi / 180
+
+        alpha = -objectY * kRadPerPixel
+        beta = -objectX * kRadPerPixel
+        return (alpha, beta)
 
     def periodic(self):
         obj = self.camera.take_snapshot(1)
         self.detected = self.camera.largest_object()
 
-        d = self.getDetected()
+        d = self.getDetectedRelative()
         # if obj is not None:
         #     print(obj[0].centerX, obj[0].centerY)
         if d is not None:
