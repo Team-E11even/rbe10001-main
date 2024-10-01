@@ -486,18 +486,20 @@ class ArmSubsystem(Subsystem):
 
         self.flickAmount = -0.05
 
-        print("target")
+        self.active = True
+
 
     def periodic(self):
-        self.shoulderMotor.spin_to_position(
-            self.target.shoulder, RotationUnits.REV, wait=False
-        )
-        self.elbowMotor.spin_to_position(
-            self.target.elbow, RotationUnits.REV, wait=False
-        )
-        self.wristMotor.spin_to_position(
-            self.target.wrist + self.flickAmount, RotationUnits.REV, wait=False
-        )
+        if self.active:
+            self.shoulderMotor.spin_to_position(
+                self.target.shoulder, RotationUnits.REV, wait=False
+            )
+            self.elbowMotor.spin_to_position(
+                self.target.elbow, RotationUnits.REV, wait=False
+            )
+            self.wristMotor.spin_to_position(
+                self.target.wrist + self.flickAmount, RotationUnits.REV, wait=False
+            )
 
         shoulderPosition = self.shoulderMotor.position(RotationUnits.REV)
         elbowPosition = self.elbowMotor.position(RotationUnits.REV)
@@ -879,6 +881,24 @@ class LowerBlocker(Command):
     def initialize(self):
         self.blocker.state = BlockerSubsystem.BlockerState.Lower
 
+class FreeArm(Command):
+    def __init__(self, arm: ArmSubsystem):
+        Command.__init__(self)
+        self.arm = arm
+        self.addRequirements([self.arm])
+
+    def initialize(self):
+        self.arm.active = False
+
+class ActiveArm(Command):
+    def __init__(self, arm: ArmSubsystem):
+        Command.__init__(self)
+        self.arm = arm
+        self.addRequirements([self.arm])
+
+    def initialize(self):
+        self.arm.active = True
+
 drive = DriveSubsystem()
 arm = ArmSubsystem()
 cam = CameraSubsystem()
@@ -913,6 +933,9 @@ ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
 ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 
 ControllerTriggers.buttonUp.onTrue = DriveBucket(drive, cam, ControllerTriggers.axis3)
+
+ControllerTriggers.buttonLeft.onTrue = FreeArm(arm)
+ControllerTriggers.buttonLeft.onFalse = ActiveArm(arm)
 
 # -------------------------------------------------------
 # ----------------main loop, do not touch----------------
