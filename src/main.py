@@ -484,20 +484,20 @@ class ArmSubsystem(Subsystem):
             ArmSubsystem.Constants.wrist,
         )
 
-        self.flickAmount = 0
+        self.flickAmount = -0.05
 
         print("target")
 
     def periodic(self):
-        # self.shoulderMotor.spin_to_position(
-        #     self.target.shoulder, RotationUnits.REV, wait=False
-        # )
-        # self.elbowMotor.spin_to_position(
-        #     self.target.elbow, RotationUnits.REV, wait=False
-        # )
-        # self.wristMotor.spin_to_position(
-        #     self.target.wris + self.flickAmount, RotationUnits.REV, wait=False
-        # )
+        self.shoulderMotor.spin_to_position(
+            self.target.shoulder, RotationUnits.REV, wait=False
+        )
+        self.elbowMotor.spin_to_position(
+            self.target.elbow, RotationUnits.REV, wait=False
+        )
+        self.wristMotor.spin_to_position(
+            self.target.wrist + self.flickAmount, RotationUnits.REV, wait=False
+        )
 
         shoulderPosition = self.shoulderMotor.position(RotationUnits.REV)
         elbowPosition = self.elbowMotor.position(RotationUnits.REV)
@@ -602,22 +602,43 @@ class StopMotors(Command):
 
 
 class DriveCamAligned(Command):
-    def __init__(self, drive: DriveSubsystem, came) -> None:
+    def __init__(
+        self, drive: DriveSubsystem, came, control: Callable[[], float]
+    ) -> None:
         Command.__init__(self)
         self.drive = drive
         self.cam = came
+        self.control = control
+        self.done = False
 
         self.addRequirements([self.drive, self.cam])
+
+    def initialize(self):
+        self.done = False
 
     def periodic(self):
         offset = self.cam.getDetectedRelative()
 
+        if self.cam.sensorDetected():
+            arm.flickAmount = 0.4
+            self.done = True
+        else:
+            arm.flickAmount = -0.05
+
         if offset is not None:
-            offsetX, offsetY = offset
-            turn = offset[1] * 100
-            fw = 0
+            offsetY, offsetX = offset
+            turn = offsetX * 100
+            fw = 30
             # fw = (offset[1] - 4)
             self.drive.setSpeed(fw - turn, fw + turn)
+        else:
+            self.drive.setSpeed(-20, 20)
+
+    def isFinished(self):
+        return self.done
+
+    def end(self):
+        self.drive.setSpeed(0,0)
 
 
 # ARM COMMANDS
@@ -631,7 +652,7 @@ class SetTop(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(-0.04 / 6, 0.63 / 6, 0.89 / 6)
+        self.arm.setArmAngles(1.10, 1.90, 1.58)
 
 
 class SetMid(Command):
@@ -642,7 +663,7 @@ class SetMid(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(-0.31 / 6, 1.02 / 6, 0.9 / 6)
+        self.arm.setArmAngles(0.9, 2.10, 1.72)
 
 
 class SetLow(Command):
@@ -653,7 +674,18 @@ class SetLow(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(-0.58 / 6, 1.12 / 6, 0.97 / 6)
+        self.arm.setArmAngles(1.13, 2.47, 2.72)
+
+
+class SetPush(Command):
+    def __init__(self, arm: ArmSubsystem) -> None:
+        Command.__init__(self)
+        self.arm = arm
+
+        self.addRequirements([arm])
+
+    def initialize(self):
+        self.arm.setArmAngles(1.52, 2.47, 2.72)
 
 
 class SetFlick(Command):
@@ -675,14 +707,15 @@ class ClearFlick(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.flickAmount = 0
+        self.arm.flickAmount = -0.05
 
 
 class CameraSubsystem(Subsystem):
     def __init__(self):
         Subsystem.__init__(self)
         self.sig_1 = Signature(1, -7247, -5963, -6605, -2499, -705, -1602, 3.0, 0)
-        self.camera = Vision(Ports.PORT16, 50, self.sig_1)
+        self.camera = Vision(Ports.PORT10, 50, self.sig_1)
+        self.linePresence = Line(brain.three_wire_port.d)
 
         self.detected = None
 
@@ -693,9 +726,8 @@ class CameraSubsystem(Subsystem):
         kPhi = 0
         kObjectHeight = 14.5  # inches
 
-
-        objectX = self.detected.centerX - (320/2)
-        objectY = self.detected.centerY - (200/2)
+        objectX = self.detected.centerX - (320 / 2)
+        objectY = self.detected.centerY - (200 / 2)
 
         kDegPerPixel = 0.1875
         kRadPerPixel = kDegPerPixel * math.pi / 180
@@ -722,15 +754,22 @@ class CameraSubsystem(Subsystem):
             + dy
             + h * math.sin(kTheta) / math.tan(alpha)
         )
-        zFinal = h * math.cos(kPhi) + h*math.sin(kPhi) * math.tan(beta) / math.tan(alpha) +dz
+        zFinal = (
+            h * math.cos(kPhi)
+            + h * math.sin(kPhi) * math.tan(beta) / math.tan(alpha)
+            + dz
+        )
 
         return (xFinal, yFinal, zFinal)
+
+    def sensorDetected(self):
+        return self.linePresence.reflectivity() > 25
 
     def getDetectedRelative(self):
         if self.detected is None:
             return None
-        objectX = self.detected.centerX - (320/2)
-        objectY = self.detected.centerY - (200/2)
+        objectX = self.detected.centerX - (320 / 2)
+        objectY = self.detected.centerY - (200 / 2)
 
         kDegPerPixel = 0.1875
         kRadPerPixel = kDegPerPixel * math.pi / 180
@@ -744,16 +783,50 @@ class CameraSubsystem(Subsystem):
         self.detected = self.camera.largest_object()
 
         d = self.getDetectedRelative()
-        # if obj is not None:
-        #     print(obj[0].centerX, obj[0].centerY)
+        if obj is not None:
+            print(obj[0].centerX, obj[0].centerY)
         if d is not None:
-            brain.screen.print_at(d[0], x=200, y=100)
-            brain.screen.print_at(d[1], x=200, y=150)
+            brain.screen.print_at(d[0], x=210, y=100)
+            brain.screen.print_at(d[1], x=210, y=150)
 
+
+class BlockerSubsystem(Subsystem):
+    class BlockerState:
+        Lower = 0
+        Up = 1
+    def __init__(self):
+        Subsystem.__init__(self)
+        self.motor = Motor(Ports.PORT11, GearSetting.RATIO_18_1, False)
+        self.state = BlockerSubsystem.BlockerState.Lower
+
+    def periodic(self):
+        if self.state == BlockerSubsystem.BlockerState.Lower:
+            self.motor.spin_to_position(0, wait=False)
+        if self.state == BlockerSubsystem.BlockerState.Up:
+            self.motor.spin_to_position(0.25, RotationUnits.REV, wait=False)
+
+class LiftBlocker(Command):
+    def __init__(self, blocker: BlockerSubsystem):
+        Command.__init__(self)
+        self.blocker = blocker
+        self.addRequirements([self.blocker])
+
+    def initialize(self):
+        self.blocker.state = BlockerSubsystem.BlockerState.Up
+
+class LowerBlocker(Command):
+    def __init__(self, blocker: BlockerSubsystem):
+        Command.__init__(self)
+        self.blocker = blocker
+        self.addRequirements([self.blocker])
+
+    def initialize(self):
+        self.blocker.state = BlockerSubsystem.BlockerState.Lower
 
 drive = DriveSubsystem()
 arm = ArmSubsystem()
 cam = CameraSubsystem()
+blocker = BlockerSubsystem()
 
 ControllerTriggers.buttonA.onTrue = TankDrive(
     drive, ControllerTriggers.axis3, ControllerTriggers.axis2
@@ -768,14 +841,20 @@ ControllerTriggers.buttonA.onTrue = TankDrive(
 # Bumpers.fwBump.onTrue = DriveBack(drive, 10)
 
 ControllerTriggers.buttonB.onTrue = DriveBack(drive, 10)
-ControllerTriggers.buttonX.onTrue = DriveCamAligned(drive, cam)
+ControllerTriggers.buttonX.onTrue = DriveCamAligned(
+    drive, cam, ControllerTriggers.axis3
+)
 ControllerTriggers.buttonY.onTrue = SetTop(arm)
 
 ControllerTriggers.buttonR1.onTrue = SetMid(arm)
 ControllerTriggers.buttonR2.onTrue = SetLow(arm)
+ControllerTriggers.buttonL2.onTrue = SetPush(arm)
 
 ControllerTriggers.buttonL1.onTrue = SetFlick(arm)
 ControllerTriggers.buttonL1.onFalse = ClearFlick(arm)
+
+ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
+ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 
 # -------------------------------------------------------
 # ----------------main loop, do not touch----------------
