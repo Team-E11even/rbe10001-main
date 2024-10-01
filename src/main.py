@@ -340,6 +340,27 @@ class DifferentialDriveKinematics:
         )
 
 
+def optimizeAngle(currentAngle: float, targetAngle: float) -> float:
+
+    closestFullRotation = (
+        math.floor(abs(currentAngle / math.tau)) * (-1 if currentAngle < 0 else 1) * math.tau
+    )
+
+    currentOptimalAngle = targetAngle + closestFullRotation - currentAngle
+
+    potentialNewAngles = [
+        currentOptimalAngle,
+        currentOptimalAngle - math.tau,
+        currentOptimalAngle + math.tau,
+    ]  # closest other options
+
+    deltaAngle = math.tau  # max possible error, a full rotation!
+    for potentialAngle in potentialNewAngles:
+        if abs(deltaAngle) > abs(potentialAngle):
+            deltaAngle = potentialAngle
+
+    return deltaAngle + currentAngle
+
 class DifferentialDriveOdometry:
     def __init__(
         self,
@@ -360,7 +381,9 @@ class DifferentialDriveOdometry:
         twist = self.kinematics.toTwist2d(dl, dr)
 
         twistPose = self.pose.exp(twist)
-        newPose = Pose2d(twistPose.x + self.pose.x, twistPose.y + self.pose.y, gyro)
+
+        newAngle = optimizeAngle(self.pose.rot, gyro)
+        newPose = Pose2d(twistPose.x + self.pose.x, twistPose.y + self.pose.y, newAngle)
 
         self.l_encoder = left_encoder
         self.r_encoder = right_encoder
@@ -606,6 +629,31 @@ class StopMotors(Command):
     def isFinished(self) -> bool:
         return True
 
+class DriveToAngle(Command):
+    def __init__(self, drive: DriveSubsystem, targetAngle: float, pGain: float) -> None:
+        Command.__init__(self)
+        self.drive = drive
+        self.target = targetAngle
+        self.kP = pGain
+        self.addRequirements([self.drive])
+
+    def periodic(self):
+        driveAngle = self.drive.odometry.pose.rot
+        error = optimizeAngle(driveAngle, self.target) - driveAngle
+
+        effort = self.kP * error
+
+        self.drive.setSpeed(-effort, effort)
+
+    def isFinished(self):
+        driveAngle = self.drive.odometry.pose.rot
+        error = optimizeAngle(driveAngle, self.target) - driveAngle
+
+    def end(self):
+        self.drive.setSpeed(0,0)
+
+
+
 class DriveBucket(Command):
     def __init__(
         self, drive: DriveSubsystem, came, control: Callable[[], float]
@@ -698,6 +746,15 @@ class SetMid(Command):
     def initialize(self):
         self.arm.setArmAngles(0.9, 2.10, 1.72)
 
+class SetSafe(Command):
+    def __init__(self, arm: ArmSubsystem) -> None:
+        Command.__init__(self)
+        self.arm = arm
+
+        self.addRequirements([arm])
+
+    def initialize(self):
+        self.arm.setArmAngles(0.7, 2.10, 1.72)
 
 class SetLow(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -707,7 +764,7 @@ class SetLow(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(1.13, 2.47, 2.72)
+        self.arm.setArmAngles(1.10, 2.39, 2.70)
 
 
 class SetPush(Command):
@@ -718,8 +775,18 @@ class SetPush(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(1.52, 2.47, 2.72)
+        self.arm.setArmAngles(1.43, 2.39, 2.70)
 
+
+class SetBucketLook(Command):
+    def __init__(self, arm: ArmSubsystem) -> None:
+        Command.__init__(self)
+        self.arm = arm
+
+        self.addRequirements([arm])
+
+    def initialize(self):
+        self.arm.setArmAngles(1.60, 1.74, 2.14)
 
 class SetFlick(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -921,7 +988,7 @@ ControllerTriggers.buttonA.onTrue = TankDrive(
 # Bumpers.fwBump.onTrue = DriveBack(drive, 10)
 
 ControllerTriggers.buttonB.onTrue = DriveBack(drive, 10)
-ControllerTriggers.buttonX.onTrue = DriveCamAligned(
+ControllerTriggers.buttonUp.onTrue = DriveBucket(
     drive, cam, ControllerTriggers.axis3
 )
 ControllerTriggers.buttonY.onTrue = SetTop(arm)
@@ -936,7 +1003,15 @@ ControllerTriggers.buttonL1.onFalse = ClearFlick(arm)
 ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
 ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 
-ControllerTriggers.buttonUp.onTrue = DriveBucket(drive, cam, ControllerTriggers.axis3)
+ControllerTriggers.buttonX.onTrue = SequentialCommandGroup([
+    SetMid(arm),
+    DriveCamAligned(drive, cam, ControllerTriggers.axis3),
+    ClearFlick(arm),
+    SetSafe(arm),
+    DriveBack(drive, -1),
+    DriveToAngle(drive, math.pi, 10),
+    SetBucketLook(arm)
+])
 
 ControllerTriggers.buttonLeft.onTrue = FreeArm(arm)
 ControllerTriggers.buttonLeft.onFalse = ActiveArm(arm)
