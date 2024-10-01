@@ -342,19 +342,20 @@ class DifferentialDriveKinematics:
 
 def optimizeAngle(currentAngle: float, targetAngle: float) -> float:
 
+    tau = 2 * math.pi
     closestFullRotation = (
-        math.floor(abs(currentAngle / math.tau)) * (-1 if currentAngle < 0 else 1) * math.tau
+        math.floor(abs(currentAngle / tau)) * (-1 if currentAngle < 0 else 1) * tau
     )
 
     currentOptimalAngle = targetAngle + closestFullRotation - currentAngle
 
     potentialNewAngles = [
         currentOptimalAngle,
-        currentOptimalAngle - math.tau,
-        currentOptimalAngle + math.tau,
+        currentOptimalAngle - tau,
+        currentOptimalAngle + tau,
     ]  # closest other options
 
-    deltaAngle = math.tau  # max possible error, a full rotation!
+    deltaAngle = tau  # max possible error, a full rotation!
     for potentialAngle in potentialNewAngles:
         if abs(deltaAngle) > abs(potentialAngle):
             deltaAngle = potentialAngle
@@ -641,13 +642,14 @@ class DriveToAngle(Command):
         driveAngle = self.drive.odometry.pose.rot
         error = optimizeAngle(driveAngle, self.target) - driveAngle
 
-        effort = self.kP * error
+        effort = self.kP * -error
 
         self.drive.setSpeed(-effort, effort)
 
     def isFinished(self):
         driveAngle = self.drive.odometry.pose.rot
         error = optimizeAngle(driveAngle, self.target) - driveAngle
+        return error < 0.02
 
     def end(self):
         self.drive.setSpeed(0,0)
@@ -733,7 +735,10 @@ class SetTop(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(1.10, 1.90, 1.58)
+        self.arm.setArmAngles(0.94, 1.75, 1.78)
+
+    def isFinished(self):
+        return True
 
 
 class SetMid(Command):
@@ -744,7 +749,10 @@ class SetMid(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(0.9, 2.10, 1.72)
+        self.arm.setArmAngles(0.8, 2.09, 1.78)
+
+    def isFinished(self):
+        return True
 
 class SetSafe(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -755,6 +763,9 @@ class SetSafe(Command):
 
     def initialize(self):
         self.arm.setArmAngles(0.7, 2.10, 1.72)
+
+    def isFinished(self):
+        return True
 
 class SetLow(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -767,6 +778,9 @@ class SetLow(Command):
         self.arm.setArmAngles(1.10, 2.39, 2.70)
 
 
+    def isFinished(self):
+        return True
+
 class SetPush(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
@@ -778,6 +792,9 @@ class SetPush(Command):
         self.arm.setArmAngles(1.43, 2.39, 2.70)
 
 
+    def isFinished(self):
+        return True
+
 class SetBucketLook(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
@@ -788,6 +805,9 @@ class SetBucketLook(Command):
     def initialize(self):
         self.arm.setArmAngles(1.60, 1.74, 2.14)
 
+
+    def isFinished(self):
+        return True
 class SetFlick(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
@@ -799,6 +819,9 @@ class SetFlick(Command):
         self.arm.flickAmount = 0.4
 
 
+    def isFinished(self):
+        return True
+
 class ClearFlick(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
@@ -809,6 +832,9 @@ class ClearFlick(Command):
     def initialize(self):
         self.arm.flickAmount = 0
 
+
+    def isFinished(self):
+        return True
 
 class CameraSubsystem(Subsystem):
     class CameraMode:
@@ -1009,7 +1035,7 @@ ControllerTriggers.buttonX.onTrue = SequentialCommandGroup([
     ClearFlick(arm),
     SetSafe(arm),
     DriveBack(drive, -1),
-    DriveToAngle(drive, math.pi, 10),
+    DriveToAngle(drive, math.pi, 20),
     SetBucketLook(arm)
 ])
 
