@@ -600,6 +600,33 @@ class StopMotors(Command):
     def isFinished(self) -> bool:
         return True
 
+class DriveBucket(Command):
+    def __init__(
+        self, drive: DriveSubsystem, came, control: Callable[[], float]
+    ) -> None:
+        Command.__init__(self)
+        self.drive = drive
+        self.cam = came
+        self.control = control
+        self.done = False
+
+        self.addRequirements([self.drive, self.cam])
+
+    def initialize(self):
+        self.done = False
+
+    def periodic(self):
+        offset = self.cam.getBuckerRelative()
+
+
+        if offset is not None:
+            offsetY, offsetX = offset
+            turn = offsetX * 100
+            fw = self.control()
+            # fw = (offset[1] - 4)
+            self.drive.setSpeed(fw - turn, fw + turn)
+        else:
+            self.drive.setSpeed(-20, 20)
 
 class DriveCamAligned(Command):
     def __init__(
@@ -711,13 +738,26 @@ class ClearFlick(Command):
 
 
 class CameraSubsystem(Subsystem):
+    class CameraMode:
+        GREEN = 1
+        ORANGE = 2
+        YELLOW = 3
     def __init__(self):
         Subsystem.__init__(self)
-        self.sig_1 = Signature(1, -7247, -5963, -6605, -2499, -705, -1602, 3.0, 0)
-        self.camera = Vision(Ports.PORT10, 50, self.sig_1)
+        self.sig_green = Signature(1, -7247, -5963, -6605, -2499, -705, -1602, 3.0, 0)
+        self.sig_orange = Signature(2, 1553, 5185, 3369, -3073, -2591, -2832, 1.6, 0)
+
+
+        bucket_pink = Signature(3, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
+        bucket_orange = Signature(4, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
+        self.bucketCode = Code(bucket_pink, bucket_orange)
+        self.camera = Vision(Ports.PORT10, 50, self.sig_green, self.sig_orange)
         self.linePresence = Line(brain.three_wire_port.d)
 
         self.detected = None
+        self.bucket = None
+
+        self.currentMode = CameraSubsystem.CameraMode.ORANGE
 
     def getDetected(self):
         if self.detected is None:
@@ -778,9 +818,25 @@ class CameraSubsystem(Subsystem):
         beta = -objectX * kRadPerPixel
         return (alpha, beta)
 
+    def getBuckerRelative(self):
+        if self.bucket is None:
+            return None
+        objectX = self.bucket.centerX - (320 / 2)
+        objectY = self.bucket.centerY - (200 / 2)
+
+        kDegPerPixel = 0.1875
+        kRadPerPixel = kDegPerPixel * math.pi / 180
+
+        alpha = -objectY * kRadPerPixel
+        beta = -objectX * kRadPerPixel
+        return (alpha, beta)
+
     def periodic(self):
-        obj = self.camera.take_snapshot(1)
+        obj = self.camera.take_snapshot(self.currentMode)
         self.detected = self.camera.largest_object()
+
+        buck = self.camera.take_snapshot(self.bucketCode)
+        self.bucket = self.camera.largest_object()
 
         d = self.getDetectedRelative()
         if obj is not None:
@@ -855,6 +911,8 @@ ControllerTriggers.buttonL1.onFalse = ClearFlick(arm)
 
 ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
 ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
+
+ControllerTriggers.buttonUp.onTrue = DriveBucket(drive, cam, ControllerTriggers.axis3)
 
 # -------------------------------------------------------
 # ----------------main loop, do not touch----------------
