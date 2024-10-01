@@ -484,7 +484,7 @@ class ArmSubsystem(Subsystem):
             ArmSubsystem.Constants.wrist,
         )
 
-        self.flickAmount = -0.05
+        self.flickAmount = 0
 
         self.active = True
 
@@ -500,6 +500,10 @@ class ArmSubsystem(Subsystem):
             self.wristMotor.spin_to_position(
                 self.target.wrist + self.flickAmount, RotationUnits.REV, wait=False
             )
+        else:
+            self.shoulderMotor.stop(COAST)
+            self.elbowMotor.stop(COAST)
+            self.wristMotor.stop(COAST)
 
         shoulderPosition = self.shoulderMotor.position(RotationUnits.REV)
         elbowPosition = self.elbowMotor.position(RotationUnits.REV)
@@ -652,7 +656,7 @@ class DriveCamAligned(Command):
             arm.flickAmount = 0.4
             self.done = True
         else:
-            arm.flickAmount = -0.05
+            arm.flickAmount = 0
 
         if offset is not None:
             offsetY, offsetX = offset
@@ -736,7 +740,7 @@ class ClearFlick(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.flickAmount = -0.05
+        self.arm.flickAmount = 0
 
 
 class CameraSubsystem(Subsystem):
