@@ -548,6 +548,18 @@ class ArmSubsystem(Subsystem):
     def getArmPositions(self):
         return self.target
 
+    def wristAtTarget(self) -> bool:
+        return (self.target.wrist + self.flickAmount - self.wristMotor.position(RotationUnits.REV)) < 0.01
+
+class WaitForWrist(Command):
+    def __init__(self, arm: ArmSubsystem) -> None:
+        Command.__init__(self)
+        self.arm = arm
+
+        self.addRequirements([arm])
+
+    def isFinished(self):
+        return self.arm.wristAtTarget()
 
 # COMMANDS
 
@@ -649,7 +661,7 @@ class DriveToAngle(Command):
     def isFinished(self):
         driveAngle = self.drive.odometry.pose.rot
         error = optimizeAngle(driveAngle, self.target) - driveAngle
-        return error < 0.02
+        return abs(error) < 0.02
 
     def end(self):
         self.drive.setSpeed(0,0)
@@ -847,10 +859,10 @@ class CameraSubsystem(Subsystem):
         self.sig_orange = Signature(2, 1553, 5185, 3369, -3073, -2591, -2832, 1.6, 0)
 
 
-        bucket_pink = Signature(3, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
+        self.bucket_pink = Signature(3, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
         bucket_orange = Signature(4, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
-        self.bucketCode = Code(bucket_pink, bucket_orange)
-        self.camera = Vision(Ports.PORT10, 50, self.sig_green, self.sig_orange)
+        self.bucketCode = Code(self.bucket_pink, bucket_orange)
+        self.camera = Vision(Ports.PORT10, 50, self.sig_green, self.sig_orange, self.bucket_pink)
         self.linePresence = Line(brain.three_wire_port.d)
 
         self.detected = None
@@ -934,7 +946,7 @@ class CameraSubsystem(Subsystem):
         obj = self.camera.take_snapshot(self.currentMode)
         self.detected = self.camera.largest_object()
 
-        buck = self.camera.take_snapshot(self.bucketCode)
+        buck = self.camera.take_snapshot(self.bucket_pink)
         self.bucket = self.camera.largest_object()
 
         d = self.getDetectedRelative()
@@ -969,6 +981,9 @@ class LiftBlocker(Command):
     def initialize(self):
         self.blocker.state = BlockerSubsystem.BlockerState.Up
 
+    def isFinished(self):
+        return True
+
 class LowerBlocker(Command):
     def __init__(self, blocker: BlockerSubsystem):
         Command.__init__(self)
@@ -977,6 +992,9 @@ class LowerBlocker(Command):
 
     def initialize(self):
         self.blocker.state = BlockerSubsystem.BlockerState.Lower
+
+    def isFinished(self):
+        return True
 
 class FreeArm(Command):
     def __init__(self, arm: ArmSubsystem):
@@ -1032,11 +1050,16 @@ ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 ControllerTriggers.buttonX.onTrue = SequentialCommandGroup([
     SetMid(arm),
     DriveCamAligned(drive, cam, ControllerTriggers.axis3),
+    WaitForWrist(arm),
     ClearFlick(arm),
+    WaitForWrist(arm),
     SetSafe(arm),
     DriveBack(drive, -1),
-    DriveToAngle(drive, math.pi, 20),
-    SetBucketLook(arm)
+    DriveToAngle(drive, math.pi, 40),
+    SetBucketLook(arm),
+    LiftBlocker(blocker),
+    DriveBucket(drive, cam, lambda: 30),
+    LowerBlocker(blocker),
 ])
 
 ControllerTriggers.buttonLeft.onTrue = FreeArm(arm)
