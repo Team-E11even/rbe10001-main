@@ -851,7 +851,7 @@ class ClearFlick(Command):
 class CameraSubsystem(Subsystem):
     class CameraMode:
         GREEN = 1
-        ORANGE = 2
+        ORANGE =2
         YELLOW = 3
     def __init__(self):
         Subsystem.__init__(self)
@@ -891,7 +891,7 @@ class CameraSubsystem(Subsystem):
         dy = -4  # inches
         dx = -6.5  # inches
         dz = 7.75  # inches
-        # MY FIRST STUFF
+
         # Don't ask how these numbers appeared
         xFinal = (
             h * math.sin(kPhi) * math.sin(kTheta)
