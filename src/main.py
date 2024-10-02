@@ -891,7 +891,7 @@ class CameraSubsystem(Subsystem):
         dy = -4  # inches
         dx = -6.5  # inches
         dz = 7.75  # inches
-
+        # MY FIRST STUFF
         # Don't ask how these numbers appeared
         xFinal = (
             h * math.sin(kPhi) * math.sin(kTheta)
