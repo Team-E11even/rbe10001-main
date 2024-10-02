@@ -860,7 +860,7 @@ class CameraSubsystem(Subsystem):
         self.sig_yellow = Signature(3, 757, 1113, 935, -3435, -3085, -3260, 2.5, 0)
 
 
-        self.bucket_pink = Signature(4, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
+        self.bucket_pink = Signature(4, 4217, 4627, 4422, 3091, 3759, 3425, 2.5, 1)
         bucket_orange = Signature(5, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
         self.bucketCode = Code(self.bucket_pink, bucket_orange)
         self.camera = Vision(Ports.PORT10, 23, self.sig_green, self.sig_orange, self.bucket_pink)
