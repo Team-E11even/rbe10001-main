@@ -855,14 +855,15 @@ class CameraSubsystem(Subsystem):
         YELLOW = 3
     def __init__(self):
         Subsystem.__init__(self)
-        self.sig_green = Signature(1, -7247, -5963, -6605, -2499, -705, -1602, 3.0, 0)
-        self.sig_orange = Signature(2, 1553, 5185, 3369, -3073, -2591, -2832, 1.6, 0)
+        self.sig_green = Signature(1, -7325, -6523, -6924, -2693, -1691, -2192, 2.5, 0)
+        self.sig_orange = Signature(2, 5949, 6481, 6215, -2253, -1901, -2077, 1.9, 0)
+        self.sig_yellow = Signature(3, 757, 1113, 935, -3435, -3085, -3260, 2.5, 0)
 
 
-        self.bucket_pink = Signature(3, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
-        bucket_orange = Signature(4, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
+        self.bucket_pink = Signature(4, 4763, 6165, 5464, -2215, -2039, -2127, 2.2, 1)
+        bucket_orange = Signature(5, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
         self.bucketCode = Code(self.bucket_pink, bucket_orange)
-        self.camera = Vision(Ports.PORT10, 50, self.sig_green, self.sig_orange, self.bucket_pink)
+        self.camera = Vision(Ports.PORT10, 23, self.sig_green, self.sig_orange, self.bucket_pink)
         self.linePresence = Line(brain.three_wire_port.d)
 
         self.detected = None
