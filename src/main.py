@@ -215,6 +215,23 @@ class SequentialCommandGroup(Command):
     def isFinished(self) -> bool:
         return self.active_idx >= len(self.commands)
 
+class RepeatingCommandGroup(Command):
+    def __init__(self, commands: Command) -> None:
+        Command.__init__(self)
+        self.comm = commands
+
+        reqs = self.comm.requirements
+        self.addRequirements(reqs)
+
+    def initialize(self):
+        self.comm.initialize()
+
+    def periodic(self):
+        self.comm.periodic()
+        if self.comm.isFinished():
+            self.comm.end()
+            self.comm.initialize()
+
 
 class ParallelCommandGroup(Command):
     def __init__(self, commands: List[Command]) -> None:
@@ -578,12 +595,14 @@ class TankDrive(Command):
 
 
 class DriveBack(Command):
-    def __init__(self, drive: DriveSubsystem, distance: float) -> None:
+    def __init__(self, drive: DriveSubsystem, distance: float, speed: float = 25) -> None:
         Command.__init__(self)
         self.distanceTarget = distance
         self.leftcurrentDistance = 0
         self.rightcurrentDistance = 0
         self.drive = drive
+
+        self.speed = speed
 
         self.done = False
 
@@ -595,14 +614,14 @@ class DriveBack(Command):
             self.drive.leftMotor.position(TURNS) - self.distanceTarget
         )
         self.drive.leftMotor.spin_to_position(
-            self.leftDistanceTarget, TURNS, wait=False
+            self.leftDistanceTarget, TURNS, self.speed, wait=False
         )
 
         self.rightDistanceTarget = (
             self.drive.rightMotor.position(TURNS) + self.distanceTarget
         )
         self.drive.rightMotor.spin_to_position(
-            self.rightDistanceTarget, TURNS, wait=False
+            self.rightDistanceTarget, TURNS, self.speed, wait=False
         )
         self.done = False
 
@@ -689,12 +708,18 @@ class DriveBucket(Command):
 
         if offset is not None:
             offsetY, offsetX = offset
-            turn = offsetX * 100
+            turn = offsetX * 80
             fw = self.control()
             # fw = (offset[1] - 4)
             self.drive.setSpeed(fw - turn, fw + turn)
         else:
             self.drive.setSpeed(-20, 20)
+
+    def isFinished(self):
+        return self.cam.ultrasonic.distance(DistanceUnits.CM) < 5
+
+    def end(self):
+        self.drive.setSpeed(0,0)
 
 class DriveCamAligned(Command):
     def __init__(
@@ -722,7 +747,7 @@ class DriveCamAligned(Command):
 
         if offset is not None:
             offsetY, offsetX = offset
-            turn = offsetX * 100
+            turn = offsetX * 60
             fw = 30
             # fw = (offset[1] - 4)
             self.drive.setSpeed(fw - turn, fw + turn)
@@ -747,7 +772,7 @@ class SetTop(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(0.94, 1.75, 1.78)
+        self.arm.setArmAngles(1.02, 1.71, 1.78)
 
     def isFinished(self):
         return True
@@ -848,6 +873,7 @@ class ClearFlick(Command):
     def isFinished(self):
         return True
 
+
 class CameraSubsystem(Subsystem):
     class CameraMode:
         GREEN = 1
@@ -856,15 +882,24 @@ class CameraSubsystem(Subsystem):
     def __init__(self):
         Subsystem.__init__(self)
         self.sig_green = Signature(1, -7325, -6523, -6924, -2693, -1691, -2192, 2.5, 0)
-        self.sig_orange = Signature(2, 5949, 6481, 6215, -2253, -1901, -2077, 1.9, 0)
-        self.sig_yellow = Signature(3, 757, 1113, 935, -3435, -3085, -3260, 2.5, 0)
+        self.sig_orange = Signature(2, 3609, 5899, 4754, -2451, -2059, -2255, 2.5, 0)
+        self.sig_yellow = Signature(3, -1, 1255, 627, -3761, 3059, -3410, 1.5, 0)
 
 
         self.bucket_pink = Signature(4, 4217, 4627, 4422, 3091, 3759, 3425, 2.5, 1)
         bucket_orange = Signature(5, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
         self.bucketCode = Code(self.bucket_pink, bucket_orange)
-        self.camera = Vision(Ports.PORT10, 23, self.sig_green, self.sig_orange, self.bucket_pink)
-        self.linePresence = Line(brain.three_wire_port.d)
+        self.camera = Vision(Ports.PORT10, 23, self.sig_green, self.sig_orange, self.sig_yellow, self.bucket_pink)
+        self.linePresence = Line(brain.three_wire_port.e)
+
+        self.bLine = Line(brain.three_wire_port.f)
+
+        self.rLine = Line(brain.three_wire_port.g)
+        self.lLine = Line(brain.three_wire_port.h)
+
+        self.ultrasonic = Sonar(brain.three_wire_port.c)
+
+        self.sideSonar = Sonar(brain.three_wire_port.a)
 
         self.detected = None
         self.bucket = None
@@ -945,10 +980,16 @@ class CameraSubsystem(Subsystem):
 
     def periodic(self):
         obj = self.camera.take_snapshot(self.currentMode)
-        self.detected = self.camera.largest_object()
+        if obj is None:
+            self.detected = None
+        else:
+            self.detected = self.camera.largest_object()
 
         buck = self.camera.take_snapshot(self.bucket_pink)
-        self.bucket = self.camera.largest_object()
+        if buck is None:
+            self.bucket = None
+        else:
+            self.bucket = self.camera.largest_object()
 
         d = self.getDetectedRelative()
         if obj is not None:
@@ -957,6 +998,18 @@ class CameraSubsystem(Subsystem):
             brain.screen.print_at(d[0], x=210, y=100)
             brain.screen.print_at(d[1], x=210, y=150)
 
+class ChangeCameraMode(Command):
+    def __init__(self, cam: CameraSubsystem, state: CameraSubsystem.CameraMode):
+        Command.__init__(self)
+
+        self.cam = cam
+        self.state = state
+
+    def initialize(self):
+        self.cam.currentMode = self.state
+
+    def isFinished(self):
+        return True
 
 class BlockerSubsystem(Subsystem):
     class BlockerState:
@@ -1015,6 +1068,88 @@ class ActiveArm(Command):
     def initialize(self):
         self.arm.active = True
 
+class LineFollow(Command):
+    def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem):
+        Command.__init__(self)
+        self.drive = drive
+        self.cam = cam
+        self.addRequirements([self.drive])
+        self.detectAmount = 0
+
+        self.detectThreshold = 20
+
+        self.fw = 60
+
+    def initialize(self):
+        self.detectAmount = 0
+
+    def periodic(self):
+        lDetect = self.cam.lLine.reflectivity()
+        rDetect = self.cam.rLine.reflectivity()
+
+        err = lDetect - rDetect
+        effort = err * 0.1
+
+        self.drive.setSpeed(self.fw - effort, self.fw + effort)
+
+    def isFinished(self):
+        if self.cam.sideSonar.distance(DistanceUnits.CM) < 55:
+            self.detectAmount += 1
+        return self.detectAmount > self.detectThreshold
+
+    def end(self):
+        self.drive.setSpeed(0,0)
+
+class LineFollowToFront(LineFollow):
+    def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem):
+        LineFollow.__init__(self, drive, cam)
+        self.detectThreshold = 5
+
+        self.fw = 30
+
+    def isFinished(self):
+        if self.cam.ultrasonic.distance(DistanceUnits.CM) < 5:
+            self.detectAmount += 1
+        return self.detectAmount > self.detectThreshold
+
+
+class WaitCommand(Command):
+    def __init__(self, amount: float):
+        Command.__init__(self)
+        self.timer = Timer()
+        self.waitAmount = amount
+
+    def initialize(self):
+        self.timer.reset()
+
+    def isFinished(self):
+        return self.timer.value() >= self.waitAmount
+
+
+class DriveUntilLine(Command):
+    def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem):
+        Command.__init__(self)
+        self.drive = drive
+        self.cam = cam
+        self.addRequirements([self.drive])
+        self.initialValue = 0.0
+
+    def initialize(self):
+        self.initialValue = self.cam.lLine.reflectivity() + self.cam.rLine.reflectivity()
+
+    def periodic(self):
+        self.drive.setSpeed(20, 20)
+
+    def isFinished(self):
+        currentValue = self.cam.lLine.reflectivity() + self.cam.rLine.reflectivity()
+        # return abs(currentValue - self.initialValue) > 20 or self.cam.ultrasonic.distance(DistanceUnits.CM) < 5
+        return self.cam.ultrasonic.distance(DistanceUnits.CM) < 5
+
+    def end(self):
+        self.drive.setSpeed(0,0)
+
+
+
 drive = DriveSubsystem()
 arm = ArmSubsystem()
 cam = CameraSubsystem()
@@ -1032,10 +1167,19 @@ ControllerTriggers.buttonA.onTrue = TankDrive(
 # )
 # Bumpers.fwBump.onTrue = DriveBack(drive, 10)
 
-ControllerTriggers.buttonB.onTrue = DriveBack(drive, 10)
-ControllerTriggers.buttonUp.onTrue = DriveBucket(
-    drive, cam, ControllerTriggers.axis3
+ControllerTriggers.buttonB.onTrue = LineFollow(drive, cam)
+ControllerTriggers.buttonUp.onTrue = SequentialCommandGroup(
+    [
+        LineFollowToFront(drive, cam),
+        DriveBack(drive, -0.5),
+        LiftBlocker(blocker),
+        WaitCommand(0.2),
+        DriveBack(drive, 0.5),
+        WaitCommand(1),
+        LowerBlocker(blocker)
+    ]
 )
+
 ControllerTriggers.buttonY.onTrue = SetTop(arm)
 
 ControllerTriggers.buttonR1.onTrue = SetMid(arm)
@@ -1048,23 +1192,88 @@ ControllerTriggers.buttonL1.onFalse = ClearFlick(arm)
 ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
 ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 
-ControllerTriggers.buttonX.onTrue = SequentialCommandGroup([
-    SetMid(arm),
+SeekFruit = SequentialCommandGroup([
+    DriveToAngle(drive, math.pi / 2, 40),
+    # SetTop(arm),
+    SetFlick(arm),
+    WaitForWrist(arm),
+    ClearFlick(arm),
     DriveCamAligned(drive, cam, ControllerTriggers.axis3),
     WaitForWrist(arm),
     ClearFlick(arm),
     WaitForWrist(arm),
     SetSafe(arm),
     DriveBack(drive, -1),
-    DriveToAngle(drive, math.pi, 40),
-    SetBucketLook(arm),
+])
+
+GoToWall = SequentialCommandGroup([
+    DriveToAngle(drive, -math.pi / 2, 40),
+    DriveUntilLine(drive, cam),
+    DriveBack(drive, -0.3),
+    DriveToAngle(drive, -math.pi, 40),
+])
+
+DeliverFruit = SequentialCommandGroup([
+    LineFollowToFront(drive, cam),
+    DriveBack(drive, -0.5),
     LiftBlocker(blocker),
-    DriveBucket(drive, cam, lambda: 30),
+    WaitCommand(0.2),
+    DriveBack(drive, 0.7, 125),
+    WaitCommand(1),
     LowerBlocker(blocker),
 ])
 
+
+GoToClosestWall = SequentialCommandGroup([
+    SetMid(arm),
+    LineFollow(drive, cam),
+    SeekFruit,
+    GoToWall,
+    DeliverFruit,
+])
+
+GoToMiddleFruit = SequentialCommandGroup([
+    SetMid(arm),
+    LineFollow(drive, cam),
+    DriveBack(drive, 0.5),
+    LineFollow(drive, cam),
+    SeekFruit,
+    GoToWall,
+    DeliverFruit,
+])
+
+ResetPositioning = SequentialCommandGroup([
+    DriveBack(drive, -0.4),
+    DriveToAngle(drive, 0, 40),
+])
+
+
+ControllerTriggers.buttonX.onTrue = RepeatingCommandGroup(SequentialCommandGroup([
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+    GoToClosestWall,
+    ResetPositioning,
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+    GoToClosestWall,
+    ResetPositioning,
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+    GoToClosestWall,
+    ResetPositioning,
+
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+    GoToMiddleFruit,
+    ResetPositioning,
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+    GoToMiddleFruit,
+    ResetPositioning,
+    ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+    GoToMiddleFruit,
+    ResetPositioning,
+]))
+
 ControllerTriggers.buttonLeft.onTrue = FreeArm(arm)
 ControllerTriggers.buttonLeft.onFalse = ActiveArm(arm)
+
+ControllerTriggers.buttonDown.onTrue = SetBucketLook(arm)
 
 # -------------------------------------------------------
 # ----------------main loop, do not touch----------------
@@ -1086,4 +1295,4 @@ while True:
             print("Command", command.__class__.__name__)
             command.end()
             command.cancel()
-    sleep(25, MSEC)  # time it takes for controllers to update
+    sleep(10, MSEC)  # time it takes for controllers to update
