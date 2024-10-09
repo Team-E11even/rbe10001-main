@@ -215,6 +215,7 @@ class SequentialCommandGroup(Command):
     def isFinished(self) -> bool:
         return self.active_idx >= len(self.commands)
 
+
 class RepeatingCommandGroup(Command):
     def __init__(self, commands: Command) -> None:
         Command.__init__(self)
@@ -379,6 +380,7 @@ def optimizeAngle(currentAngle: float, targetAngle: float) -> float:
 
     return deltaAngle + currentAngle
 
+
 class DifferentialDriveOdometry:
     def __init__(
         self,
@@ -529,7 +531,6 @@ class ArmSubsystem(Subsystem):
 
         self.active = True
 
-
     def periodic(self):
         if self.active:
             self.shoulderMotor.spin_to_position(
@@ -566,7 +567,12 @@ class ArmSubsystem(Subsystem):
         return self.target
 
     def wristAtTarget(self) -> bool:
-        return (self.target.wrist + self.flickAmount - self.wristMotor.position(RotationUnits.REV)) < 0.01
+        return abs(
+            self.target.wrist
+            + self.flickAmount
+            - self.wristMotor.position(RotationUnits.REV)
+        ) < 0.01
+
 
 class WaitForWrist(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -577,6 +583,7 @@ class WaitForWrist(Command):
 
     def isFinished(self):
         return self.arm.wristAtTarget()
+
 
 # COMMANDS
 
@@ -595,7 +602,9 @@ class TankDrive(Command):
 
 
 class DriveBack(Command):
-    def __init__(self, drive: DriveSubsystem, distance: float, speed: float = 25) -> None:
+    def __init__(
+        self, drive: DriveSubsystem, distance: float, speed: float = 25
+    ) -> None:
         Command.__init__(self)
         self.distanceTarget = distance
         self.leftcurrentDistance = 0
@@ -636,14 +645,6 @@ class DriveBack(Command):
             self.drive.leftMotor.stop()
             self.done = True
 
-    def end(self):
-        print(
-            self.rightDistanceTarget,
-            self.leftDistanceTarget,
-            self.distanceTarget,
-            self.done,
-        )
-
     def isFinished(self) -> bool:
         return self.done
 
@@ -661,19 +662,27 @@ class StopMotors(Command):
     def isFinished(self) -> bool:
         return True
 
+
 class DriveToAngle(Command):
-    def __init__(self, drive: DriveSubsystem, targetAngle: float, pGain: float) -> None:
+    def __init__(
+        self,
+        drive: DriveSubsystem,
+        targetAngle: float,
+        pGain: float,
+        maxspeed: float = 30,
+    ) -> None:
         Command.__init__(self)
         self.drive = drive
         self.target = targetAngle
         self.kP = pGain
+        self.maxspeed = maxspeed
         self.addRequirements([self.drive])
 
     def periodic(self):
         driveAngle = self.drive.odometry.pose.rot
         error = optimizeAngle(driveAngle, self.target) - driveAngle
 
-        effort = self.kP * -error
+        effort = min(self.kP * -error, self.maxspeed)
 
         self.drive.setSpeed(-effort, effort)
 
@@ -683,8 +692,7 @@ class DriveToAngle(Command):
         return abs(error) < 0.02
 
     def end(self):
-        self.drive.setSpeed(0,0)
-
+        self.drive.setSpeed(0, 0)
 
 
 class DriveBucket(Command):
@@ -705,7 +713,6 @@ class DriveBucket(Command):
     def periodic(self):
         offset = self.cam.getBuckerRelative()
 
-
         if offset is not None:
             offsetY, offsetX = offset
             turn = offsetX * 80
@@ -719,14 +726,20 @@ class DriveBucket(Command):
         return self.cam.ultrasonic.distance(DistanceUnits.CM) < 5
 
     def end(self):
-        self.drive.setSpeed(0,0)
+        self.drive.setSpeed(0, 0)
+
 
 def map_range(x, in_min, in_max, out_min, out_max):
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
 
 class DriveCamAligned(Command):
     def __init__(
-        self, drive: DriveSubsystem, arm: ArmSubsystem , came, control: Callable[[], float]
+        self,
+        drive: DriveSubsystem,
+        arm: ArmSubsystem,
+        came,
+        control: Callable[[], float],
     ) -> None:
         Command.__init__(self)
         self.drive = drive
@@ -742,8 +755,14 @@ class DriveCamAligned(Command):
 
         self.addRequirements([self.drive, self.cam])
 
+        self.changeHeight = 0
+        self.didOscillate = False
+
     def initialize(self):
         self.done = False
+        self.didOscillate = False
+        self.changeHeight = 0
+        arm.setArmAngles(*SetMid.angles)
 
     def periodic(self):
         offset = self.cam.getDetectedRelative()
@@ -752,31 +771,40 @@ class DriveCamAligned(Command):
             arm.flickAmount = 0.4
             self.done = True
         else:
-            arm.flickAmount = 0
-
-        if self.resetting:
-            self.drive.setSpeed(0,0)
-            arm.setArmAngles(*SetTop.angles)
-            arm.flickAmount = 0.4
-            if arm.wristAtTarget():
-                self.resetting = False
+            if self.didOscillate:
+                arm.flickAmount = 0.12
+            else:
                 arm.flickAmount = 0
+
+        # if self.resetting:
+        #     self.drive.setSpeed(0,0)
+        #     arm.setArmAngles(*SetTop.angles)
+        #     arm.flickAmount = 0.4
+        #     if arm.wristAtTarget():
+        #         self.resetting = False
+        #         arm.flickAmount = 0
 
         # if not self.resetting and not arm.wristAtTarget():
         #     return
 
-
         if offset is not None:
             offsetY, offsetX = offset
 
-            if offsetY > 0.15:
-                self.resetting = True
+            if offsetY > 0.15 and arm.wristAtTarget() and abs(arm.flickAmount) < 0.01:
+                self.changeHeight += 1
+                if self.changeHeight > 10:
+                    arm.setArmAngles(*SetTop.angles)
+            elif offsetY < -0.25:
+                self.changeHeight -= 1
+                if self.changeHeight < -10:
+                    arm.setArmAngles(*SetMid.angles)
 
-            if not self.resetting:
-                turn = offsetX * 60
-                fw = 30 * (max(map_range(offsetX, 0, 1, 1, 0), 0) ** 2)
-                # fw = (offset[1] - 4)
-                self.drive.setSpeed(fw - turn, fw + turn)
+
+            # if not self.resetting:
+            turn = offsetX * 60
+            fw = 30 * (max(map_range(abs(offsetX), 0, 0.5, 1, 0), 0) ** 2)
+            # fw = (offset[1] - 4)
+            self.drive.setSpeed(fw - turn, fw + turn)
 
             self.oscillating = False
         else:
@@ -784,22 +812,27 @@ class DriveCamAligned(Command):
                 self.oscillating = True
                 self.theTimer.reset()
 
-            t = self.theTimer.value()
-            vel = 4 * t * math.cos(4*t) + math.sin(4*t)
+            arm.flickAmount = -0.2
+
+            t = self.theTimer.value() + 0.5
+            if t > 1:
+                self.didOscillate = True
+            vel = 4 * t * math.cos(4 * t) + math.sin(4 * t)
             self.drive.setSpeed(-vel, vel)
 
     def isFinished(self):
         return self.done
 
     def end(self):
-        self.drive.setSpeed(0,0)
+        self.drive.setSpeed(0, 0)
 
 
 # ARM COMMANDS
 
 
 class SetTop(Command):
-    angles = (1.02, 1.71, 1.78)
+    angles = (1.02, 1.71, 1.85)
+
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
         self.arm = arm
@@ -814,6 +847,8 @@ class SetTop(Command):
 
 
 class SetMid(Command):
+    angles = (0.8, 2.09, 1.78)
+
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
         self.arm = arm
@@ -821,10 +856,11 @@ class SetMid(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(0.8, 2.09, 1.78)
+        self.arm.setArmAngles(*self.angles)
 
     def isFinished(self):
         return True
+
 
 class SetSafe(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -834,10 +870,11 @@ class SetSafe(Command):
         self.addRequirements([arm])
 
     def initialize(self):
-        self.arm.setArmAngles(0.7, 2.10, 1.72)
+        self.arm.setArmAngles(0.6, 2.10, 1.72)
 
     def isFinished(self):
         return True
+
 
 class SetLow(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -849,9 +886,9 @@ class SetLow(Command):
     def initialize(self):
         self.arm.setArmAngles(1.10, 2.39, 2.70)
 
-
     def isFinished(self):
         return True
+
 
 class SetPush(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -863,9 +900,9 @@ class SetPush(Command):
     def initialize(self):
         self.arm.setArmAngles(1.43, 2.39, 2.70)
 
-
     def isFinished(self):
         return True
+
 
 class SetBucketLook(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -877,9 +914,10 @@ class SetBucketLook(Command):
     def initialize(self):
         self.arm.setArmAngles(1.60, 1.74, 2.14)
 
-
     def isFinished(self):
         return True
+
+
 class SetFlick(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
         Command.__init__(self)
@@ -890,9 +928,9 @@ class SetFlick(Command):
     def initialize(self):
         self.arm.flickAmount = 0.4
 
-
     def isFinished(self):
         return True
+
 
 class ClearFlick(Command):
     def __init__(self, arm: ArmSubsystem) -> None:
@@ -904,7 +942,6 @@ class ClearFlick(Command):
     def initialize(self):
         self.arm.flickAmount = 0
 
-
     def isFinished(self):
         return True
 
@@ -912,19 +949,26 @@ class ClearFlick(Command):
 class CameraSubsystem(Subsystem):
     class CameraMode:
         GREEN = 1
-        ORANGE =2
+        ORANGE = 2
         YELLOW = 3
+
     def __init__(self):
         Subsystem.__init__(self)
-        self.sig_orange = Signature(2, 6103, 6553, 6328, -2463, -2109, -2286, 2.5, 0)
-        self.sig_green = Signature(1, -6957, -6231, -6594, -2957, -2483, -2720, 2.5, 0)
+        self.sig_orange = Signature(2, 2569, 5159, 3864, -2487, -2047, -2267, 2.3, 0)
+        self.sig_green = Signature(1, -7477, -6735, -7091, -2605, -2119, -2362, 2.5, 0)
         self.sig_yellow = Signature(3, 173, 753, 463, -3765, -3359, -3562, 5, 0)
-
 
         self.bucket_pink = Signature(4, 4217, 4627, 4422, 3091, 3759, 3425, 2.5, 1)
         bucket_orange = Signature(5, 4061, 4217, 4139, 2999, 3213, 3106, 2.5, 1)
         self.bucketCode = Code(self.bucket_pink, bucket_orange)
-        self.camera = Vision(Ports.PORT10, 40, self.sig_green, self.sig_orange, self.sig_yellow, self.bucket_pink)
+        self.camera = Vision(
+            Ports.PORT10,
+            40,
+            self.sig_green,
+            self.sig_orange,
+            self.sig_yellow,
+            self.bucket_pink,
+        )
         self.linePresence = Line(brain.three_wire_port.e)
 
         self.bLine = Line(brain.three_wire_port.f)
@@ -956,7 +1000,6 @@ class CameraSubsystem(Subsystem):
 
         alpha = -objectY * kRadPerPixel
         beta = -objectX * kRadPerPixel
-        print(alpha, beta)
 
         h = 2.5  # inches
         dy = -4  # inches
@@ -985,7 +1028,7 @@ class CameraSubsystem(Subsystem):
         return (xFinal, yFinal, zFinal)
 
     def sensorDetected(self):
-        return self.linePresence.reflectivity() > 25
+        return self.linePresence.reflectivity() > 20
 
     def getDetectedRelative(self):
         if self.detected is None:
@@ -1027,11 +1070,10 @@ class CameraSubsystem(Subsystem):
             self.bucket = self.camera.largest_object()
 
         d = self.getDetectedRelative()
-        if obj is not None:
-            print(obj[0].centerX, obj[0].centerY)
         if d is not None:
             brain.screen.print_at(d[0], x=210, y=100)
             brain.screen.print_at(d[1], x=210, y=150)
+
 
 class ChangeCameraMode(Command):
     def __init__(self, cam: CameraSubsystem, state: CameraSubsystem.CameraMode):
@@ -1046,10 +1088,12 @@ class ChangeCameraMode(Command):
     def isFinished(self):
         return True
 
+
 class BlockerSubsystem(Subsystem):
     class BlockerState:
         Lower = 0
         Up = 1
+
     def __init__(self):
         Subsystem.__init__(self)
         self.motor = Motor(Ports.PORT11, GearSetting.RATIO_18_1, False)
@@ -1060,6 +1104,7 @@ class BlockerSubsystem(Subsystem):
             self.motor.spin_to_position(0, wait=False)
         if self.state == BlockerSubsystem.BlockerState.Up:
             self.motor.spin_to_position(0.25, RotationUnits.REV, wait=False)
+
 
 class LiftBlocker(Command):
     def __init__(self, blocker: BlockerSubsystem):
@@ -1073,6 +1118,7 @@ class LiftBlocker(Command):
     def isFinished(self):
         return True
 
+
 class LowerBlocker(Command):
     def __init__(self, blocker: BlockerSubsystem):
         Command.__init__(self)
@@ -1085,6 +1131,7 @@ class LowerBlocker(Command):
     def isFinished(self):
         return True
 
+
 class FreeArm(Command):
     def __init__(self, arm: ArmSubsystem):
         Command.__init__(self)
@@ -1094,6 +1141,7 @@ class FreeArm(Command):
     def initialize(self):
         self.arm.active = False
 
+
 class ActiveArm(Command):
     def __init__(self, arm: ArmSubsystem):
         Command.__init__(self)
@@ -1102,6 +1150,61 @@ class ActiveArm(Command):
 
     def initialize(self):
         self.arm.active = True
+
+
+class DriveLineIgnoring(Command):
+    def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem, distance: float):
+        Command.__init__(self)
+        self.drive = drive
+        self.cam = cam
+        self.distance = distance
+        self.addRequirements([self.drive])
+
+        self.distanceDriven = 0
+
+        self.theTimer = Timer()
+        self.oscillating = False
+
+        self.totalTimer = Timer()
+
+        self.leftDistanceTarget = 0
+        self.rightDistanceTarget = 0
+
+        self.fw = 40
+
+    def initialize(self):
+        self.distanceDriven = 0
+        self.leftDistanceTarget = -(self.drive.leftMotor.position(TURNS))
+        self.rightDistanceTarget = self.drive.rightMotor.position(TURNS)
+
+        self.totalTimer.reset()
+
+    def periodic(self):
+        lDetect = self.cam.lLine.reflectivity()
+        rDetect = self.cam.rLine.reflectivity()
+
+        if lDetect < 40 and rDetect < 40:
+            if not self.oscillating:
+                self.oscillating = True
+                self.theTimer.reset()
+
+            t = self.theTimer.value() + 0.5
+            vel = 4 * t * math.cos(4 * t) + math.sin(4 * t)
+            self.drive.setSpeed(-vel, vel)
+        else:
+            self.oscillating = False
+
+            err = lDetect - rDetect
+            effort = err * 0.1
+
+            self.drive.setSpeed(self.fw - effort, self.fw + effort)
+
+    def isFinished(self):
+        return self.totalTimer.value() >= self.distance
+
+    def end(self):
+        self.drive.setSpeed(0, 0)
+
 
 class LineFollow(Command):
     def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem):
@@ -1115,6 +1218,9 @@ class LineFollow(Command):
 
         self.fw = 40
 
+        self.theTimer = Timer()
+        self.oscillating = False
+
     def initialize(self):
         self.detectAmount = 0
 
@@ -1122,18 +1228,33 @@ class LineFollow(Command):
         lDetect = self.cam.lLine.reflectivity()
         rDetect = self.cam.rLine.reflectivity()
 
-        err = lDetect - rDetect
-        effort = err * 0.1
+        if lDetect < 40 and rDetect < 40:
+            if not self.oscillating:
+                self.oscillating = True
+                self.theTimer.reset()
 
-        self.drive.setSpeed(self.fw - effort, self.fw + effort)
+            t = self.theTimer.value() + 0.5
+            vel = 4 * t * math.cos(4 * t) + math.sin(4 * t)
+            self.drive.setSpeed(-vel, vel)
+        else:
+            self.oscillating = False
+
+            err = lDetect - rDetect
+            effort = err * 0.1
+
+            self.drive.setSpeed(self.fw - effort, self.fw + effort)
 
     def isFinished(self):
+        if self.oscillating:
+            return False
+
         if self.cam.sideSonar.distance(DistanceUnits.CM) < 55:
             self.detectAmount += 1
         return self.detectAmount > self.detectThreshold
 
     def end(self):
-        self.drive.setSpeed(0,0)
+        self.drive.setSpeed(0, 0)
+
 
 class LineFollowToFront(LineFollow):
     def __init__(self, drive: DriveSubsystem, cam: CameraSubsystem):
@@ -1170,7 +1291,9 @@ class DriveUntilLine(Command):
         self.initialValue = 0.0
 
     def initialize(self):
-        self.initialValue = self.cam.lLine.reflectivity() + self.cam.rLine.reflectivity()
+        self.initialValue = (
+            self.cam.lLine.reflectivity() + self.cam.rLine.reflectivity()
+        )
 
     def periodic(self):
         self.drive.setSpeed(20, 20)
@@ -1181,8 +1304,7 @@ class DriveUntilLine(Command):
         return self.cam.ultrasonic.distance(DistanceUnits.CM) < 5
 
     def end(self):
-        self.drive.setSpeed(0,0)
-
+        self.drive.setSpeed(0, 0)
 
 
 drive = DriveSubsystem()
@@ -1211,7 +1333,7 @@ ControllerTriggers.buttonUp.onTrue = SequentialCommandGroup(
         WaitCommand(0.2),
         DriveBack(drive, 0.5),
         WaitCommand(1),
-        LowerBlocker(blocker)
+        LowerBlocker(blocker),
     ]
 )
 
@@ -1227,100 +1349,175 @@ ControllerTriggers.buttonL1.onFalse = ClearFlick(arm)
 ControllerTriggers.buttonRight.onTrue = LiftBlocker(blocker)
 ControllerTriggers.buttonRight.onFalse = LowerBlocker(blocker)
 
-SeekFruit = SequentialCommandGroup([
-    DriveToAngle(drive, math.pi / 2, 40),
-    # SetTop(arm),
-    SetFlick(arm),
-    WaitForWrist(arm),
-    ClearFlick(arm),
-    DriveCamAligned(drive, arm, cam, ControllerTriggers.axis3),
-    WaitForWrist(arm),
-    ClearFlick(arm),
-    WaitForWrist(arm),
-    SetSafe(arm),
-    DriveBack(drive, -1),
+def SeekFruit(offset):
+    return SequentialCommandGroup(
+        [
+            DriveToAngle(drive, math.pi / 2 + offset, 40),
+            SetMid(arm),
+            SetFlick(arm),
+            WaitForWrist(arm),
+            ClearFlick(arm),
+            DriveCamAligned(drive, arm, cam, ControllerTriggers.axis3),
+            WaitForWrist(arm),
+            ClearFlick(arm),
+            WaitForWrist(arm),
+            SetSafe(arm),
+            DriveBack(drive, -0.5),
+        ]
+    )
+
+def GoToWall(offset):
+    return SequentialCommandGroup(
+        [
+            DriveToAngle(drive, -math.pi / 2 + offset, 40),
+            DriveUntilLine(drive, cam),
+            DriveBack(drive, -0.3),
+            DriveToAngle(drive, -math.pi + offset, 40),
+        ]
+    )
+
+DeliverFruit = SequentialCommandGroup(
+    [
+        LineFollowToFront(drive, cam),
+        DriveBack(drive, -0.5),
+        LiftBlocker(blocker),
+        WaitCommand(0.2),
+        DriveBack(drive, 0.7, 125),
+        WaitCommand(1),
+        LowerBlocker(blocker),
+    ]
+)
+
+
+def GoToClosestWall(dist, offset):
+    return SequentialCommandGroup(
+        [
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, dist),
+            SeekFruit(offset),
+            GoToWall(offset),
+            DeliverFruit,
+        ]
+    )
+
+
+def GoToMiddleFruit(dist, offset):
+    return SequentialCommandGroup(
+        [
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, 1),
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, dist),
+            SeekFruit(offset),
+            GoToWall(offset),
+            DeliverFruit,
+        ]
+    )
+
+
+def GoToFarFruit(dist, offset):
+    return SequentialCommandGroup(
+        [
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, 1),
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, 1),
+            LineFollow(drive, cam),
+            DriveLineIgnoring(drive, cam, dist),
+            SeekFruit(offset),
+            GoToWall(offset),
+            DeliverFruit,
+        ]
+    )
+
+
+ResetPositioning = SequentialCommandGroup(
+    [
+        DriveBack(drive, -0.4),
+        DriveToAngle(drive, -math.pi / 4, 40),
+        DriveBack(drive, 0.5),
+        DriveToAngle(drive, 0, 40),
+    ]
+)
+
+ResetPositioningFar = SequentialCommandGroup(
+    [
+        DriveBack(drive, -0.4),
+        DriveToAngle(drive, math.pi-math.pi / 4, 40),
+        DriveBack(drive, 0.5),
+        DriveToAngle(drive, math.pi, 40),
+    ]
+)
+
+GoToOtherSide = SequentialCommandGroup([
+    LineFollowToFront(drive,cam),
+    DriveToAngle(drive, math.pi/2, 40),
+    DriveUntilLine(drive,cam),
+    DriveToAngle(drive, math.pi, 40),
 ])
 
-GoToWall = SequentialCommandGroup([
-    DriveToAngle(drive, -math.pi / 2, 40),
-    DriveUntilLine(drive, cam),
-    DriveBack(drive, -0.3),
-    DriveToAngle(drive, -math.pi, 40),
-])
 
-DeliverFruit = SequentialCommandGroup([
-    LineFollowToFront(drive, cam),
-    DriveBack(drive, -0.5),
-    LiftBlocker(blocker),
-    WaitCommand(0.2),
-    DriveBack(drive, 0.7, 125),
-    WaitCommand(1),
-    LowerBlocker(blocker),
-])
+ControllerTriggers.buttonX.onTrue = RepeatingCommandGroup(
+    SequentialCommandGroup(
+        [
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+            SetMid(arm),
+            GoToClosestWall(-0.5, 0),
+            ResetPositioning,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+            SetMid(arm),
+            GoToClosestWall(0.5,0),
+            ResetPositioning,
 
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+            SetMid(arm),
+            GoToMiddleFruit(-0.5,0),
+            ResetPositioning,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+            SetMid(arm),
+            GoToMiddleFruit(0.5,0),
+            ResetPositioning,
 
-GoToClosestWall = SequentialCommandGroup([
-    LineFollow(drive, cam),
-    DriveBack(drive, 0.5),
-    SeekFruit,
-    GoToWall,
-    DeliverFruit,
-])
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+            SetMid(arm),
+            GoToFarFruit(-0.5,0),
+            ResetPositioning,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+            SetMid(arm),
+            GoToFarFruit(0.5,0),
+            ResetPositioning,
 
-GoToMiddleFruit = SequentialCommandGroup([
-    LineFollow(drive, cam),
-    DriveBack(drive, 1, 25),
-    LineFollow(drive, cam),
-    SeekFruit,
-    GoToWall,
-    DeliverFruit,
-])
+            GoToOtherSide,
 
-GoToFarFruit = SequentialCommandGroup([
-    LineFollow(drive, cam),
-    DriveBack(drive, 1, 25),
-    LineFollow(drive, cam),
-    DriveBack(drive, 1, 25),
-    LineFollow(drive, cam),
-    SeekFruit,
-    GoToWall,
-    DeliverFruit,
-])
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+            SetMid(arm),
+            GoToClosestWall(-0.5, math.pi),
+            ResetPositioningFar,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+            SetMid(arm),
+            GoToClosestWall(0.5, math.pi),
+            ResetPositioningFar,
 
-ResetPositioning = SequentialCommandGroup([
-    DriveBack(drive, -0.4),
-    DriveToAngle(drive, 0, 40),
-])
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+            SetMid(arm),
+            GoToMiddleFruit(-0.5, math.pi),
+            ResetPositioningFar,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
+            SetMid(arm),
+            GoToMiddleFruit(0.5, math.pi),
+            ResetPositioningFar,
 
-
-ControllerTriggers.buttonX.onTrue = RepeatingCommandGroup(SequentialCommandGroup([
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
-    SetMid(arm),
-    GoToClosestWall,
-    ResetPositioning,
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
-    SetMid(arm),
-    GoToClosestWall,
-    ResetPositioning,
-
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
-    SetMid(arm),
-    GoToMiddleFruit,
-    ResetPositioning,
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.GREEN),
-    SetMid(arm),
-    GoToMiddleFruit,
-    ResetPositioning,
-
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
-    SetMid(arm),
-    GoToFarFruit,
-    ResetPositioning,
-    ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
-    SetMid(arm),
-    GoToFarFruit,
-    ResetPositioning,
-]))
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.ORANGE),
+            SetMid(arm),
+            GoToFarFruit(-0.5, math.pi),
+            ResetPositioningFar,
+            ChangeCameraMode(cam, CameraSubsystem.CameraMode.YELLOW),
+            SetMid(arm),
+            GoToFarFruit(0.5, math.pi),
+            ResetPositioningFar,
+        ]
+    )
+)
 
 ControllerTriggers.buttonLeft.onTrue = FreeArm(arm)
 ControllerTriggers.buttonLeft.onFalse = ActiveArm(arm)
